@@ -3,7 +3,7 @@ from pathlib import Path
 
 import requests
 
-from src.ingestion.wfs_client import get_features_raw
+from wfs_client import get_features_raw
 
 
 REQUEST_DELAY = 2
@@ -68,28 +68,42 @@ FILTER_XML = """
 
 def download(filter_xml, batch_size, n):
     RAW_DIR.mkdir(parents=True, exist_ok=True)
+    failed_batches = []
+    max_retries = 3
 
     for i in range(0, n, batch_size):
-        try:
-            response = get_features_raw(
-                type_name="ms:lokale",
-                count=batch_size,
-                filter_xml=filter_xml,
-                start_index=i
-            )
 
-            file_path = RAW_DIR / f"locales_{i:06d}.gml"
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = get_features_raw(
+                    type_name="ms:lokale",
+                    count=batch_size,
+                    filter_xml=filter_xml,
+                    start_index=i
+                )
 
-            with open(file_path, "wb") as file:
-                file.write(response.content)
+                file_path = f"data/raw/rcn/locales_{i:06d}.gml"
 
-            print(f"Downloaded batch starting at {i}")
+                with open(file_path, "wb") as file:
+                    file.write(response.content)
 
-            time.sleep(REQUEST_DELAY)
+                print(f"Downloaded batch starting at {i}")
+                break
 
-        except requests.RequestException as error:
-            print(f"Failed batch starting at {i}: {error}")
-            time.sleep(3)
+            except requests.RequestException as error:
+                print(
+                    f"Attempt {attempt}/{max_retries} failed "
+                    f"for batch {i}: {error}"
+                )
+
+                if attempt == max_retries:
+                    failed_batches.append(i)
+                else:
+                    time.sleep(5)
+
+        time.sleep(REQUEST_DELAY)
+
+    print("Failed batches:", failed_batches)
 
 
 def main():
