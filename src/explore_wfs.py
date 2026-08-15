@@ -1,8 +1,8 @@
 import requests
 import xml.etree.ElementTree as ET
 
-from src.ingestion.wfs_client import BASE_URL
-
+from src.ingestion.rcn.wfs_client import BASE_URL
+from parsing.rcn_parser import to_dict
 
 def get_capabilities():
     """
@@ -128,3 +128,11 @@ def get_output_formats(root):
                     formats.append(child.text)
 
     return formats
+
+def main():
+    root = ET.parse("data/raw/rcn/locales_000000.gml").getroot()
+    records = to_dict(root)
+    print(records[0])
+
+if __name__ == '__main__':
+    main()

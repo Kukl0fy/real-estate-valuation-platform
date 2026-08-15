@@ -3,7 +3,7 @@ from pathlib import Path
 
 import requests
 
-from wfs_client import get_features_raw
+from src.ingestion.rcn.wfs_client import get_features_raw
 
 
 REQUEST_DELAY = 2
