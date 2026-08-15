@@ -53,22 +53,37 @@ def build_building_filter(building_ids):
 def main():
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     building_ids = get_building_ids()
+    failed_batches = []
+    max_retries = 3
+    BATCH_SIZE = 10
 
-    batch = building_ids[1660:]
-    filter_xml = build_building_filter(batch)
+    for i in range(0, len(building_ids), BATCH_SIZE):
+        for attempt in range(1,max_retries + 1):
+            try:
+                batch = building_ids[i:i + BATCH_SIZE]
+                filter_xml = build_building_filter(batch)
+                response = get_features_raw(type_name='ms:budynki',count=len(batch),filter_xml=filter_xml)
 
-    response = get_features_raw(
-        type_name="ms:budynki",
-        count=len(batch),
-        filter_xml=filter_xml
-    )
+                file_path = RAW_DIR / f"buildings_{i:06d}.gml"
 
-    file_path = RAW_DIR / "buildings_001660.gml"
+                with open(file_path,'wb') as file:
+                    file.write(response.content)
+                    print(f"Downloaded batch starting at {i}")
+                    break
 
-    with open(file_path, "wb") as file:
-        file.write(response.content)
+            except requests.RequestException as error:
+                print(
+                    f"Attempt {attempt}/{max_retries} failed "
+                    f"for batch {i}: {error}"
+                )
 
-    print("Downloaded missing building")
+                if attempt == max_retries:
+                    failed_batches.append(i)
+                else:
+                    time.sleep(5)
+
+        time.sleep(2)
+    print("Failed batches:", failed_batches)
 
 if __name__ == "__main__":
     main()
