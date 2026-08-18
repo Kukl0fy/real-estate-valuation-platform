@@ -1,118 +1,152 @@
 import time
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 import requests
 
 from src.ingestion.rcn.wfs_client import get_features_raw
+from src.config import COUNTY_CODES
 
 
 REQUEST_DELAY = 2
 RAW_DIR = Path("data/raw/rcn")
 
-COUNTIES = {
-    "tarnow": "1263",
-    "tarnowski": "1216",
-    "dabrowski": "1204",
-    "brzeski": "1202",
-    "debicki": "1803",
-}
+BATCH_SIZE = 500
+MAX_RETRIES = 3
 
 
-FILTER_XML = """
-<fes:Filter xmlns:fes="http://www.opengis.net/fes/2.0">
-    <fes:And>
+def build_locales_filter(county_code):
+    return f"""
+    <fes:Filter xmlns:fes="http://www.opengis.net/fes/2.0">
+        <fes:And>
 
-        <fes:PropertyIsEqualTo>
-            <fes:ValueReference>lok_funkcja</fes:ValueReference>
-            <fes:Literal>mieszkalna</fes:Literal>
-        </fes:PropertyIsEqualTo>
+            <fes:PropertyIsEqualTo>
+                <fes:ValueReference>lok_funkcja</fes:ValueReference>
+                <fes:Literal>mieszkalna</fes:Literal>
+            </fes:PropertyIsEqualTo>
 
-        <fes:PropertyIsGreaterThanOrEqualTo>
-            <fes:ValueReference>dok_data</fes:ValueReference>
-            <fes:Literal>2020-01-01</fes:Literal>
-        </fes:PropertyIsGreaterThanOrEqualTo>
+            <fes:PropertyIsGreaterThanOrEqualTo>
+                <fes:ValueReference>dok_data</fes:ValueReference>
+                <fes:Literal>2020-01-01</fes:Literal>
+            </fes:PropertyIsGreaterThanOrEqualTo>
 
-        <fes:Or>
-
-            <fes:PropertyIsLike wildCard="*" singleChar="?" escapeChar="!">
+            <fes:PropertyIsLike
+                wildCard="*"
+                singleChar="?"
+                escapeChar="!"
+            >
                 <fes:ValueReference>lok_id_lokalu</fes:ValueReference>
-                <fes:Literal>1263*</fes:Literal>
+                <fes:Literal>{county_code}*</fes:Literal>
             </fes:PropertyIsLike>
 
-            <fes:PropertyIsLike wildCard="*" singleChar="?" escapeChar="!">
-                <fes:ValueReference>lok_id_lokalu</fes:ValueReference>
-                <fes:Literal>1216*</fes:Literal>
-            </fes:PropertyIsLike>
-
-            <fes:PropertyIsLike wildCard="*" singleChar="?" escapeChar="!">
-                <fes:ValueReference>lok_id_lokalu</fes:ValueReference>
-                <fes:Literal>1204*</fes:Literal>
-            </fes:PropertyIsLike>
-
-            <fes:PropertyIsLike wildCard="*" singleChar="?" escapeChar="!">
-                <fes:ValueReference>lok_id_lokalu</fes:ValueReference>
-                <fes:Literal>1202*</fes:Literal>
-            </fes:PropertyIsLike>
-
-            <fes:PropertyIsLike wildCard="*" singleChar="?" escapeChar="!">
-                <fes:ValueReference>lok_id_lokalu</fes:ValueReference>
-                <fes:Literal>1803*</fes:Literal>
-            </fes:PropertyIsLike>
-
-        </fes:Or>
-
-    </fes:And>
-</fes:Filter>
-"""
+        </fes:And>
+    </fes:Filter>
+    """
 
 
-def download(filter_xml, batch_size, n):
-    RAW_DIR.mkdir(parents=True, exist_ok=True)
-    failed_batches = []
-    max_retries = 3
+def get_number_returned(response):
+    root = ET.fromstring(response.content)
 
-    for i in range(0, n, batch_size):
+    number_returned = root.attrib.get("numberReturned")
 
-        for attempt in range(1, max_retries + 1):
+    if number_returned is not None:
+        return int(number_returned)
+
+    return sum(
+        1
+        for element in root.iter()
+        if element.tag.endswith("member")
+    )
+
+
+def download_county(county_code, batch_size=BATCH_SIZE):
+    filter_xml = build_locales_filter(county_code)
+
+    county_dir = RAW_DIR / county_code
+    county_dir.mkdir(parents=True, exist_ok=True)
+
+    start_index = 0
+    downloaded_records = 0
+
+    while True:
+        response = None
+
+        for attempt in range(1, MAX_RETRIES + 1):
             try:
                 response = get_features_raw(
                     type_name="ms:lokale",
                     count=batch_size,
                     filter_xml=filter_xml,
-                    start_index=i
+                    start_index=start_index,
                 )
 
-                file_path = f"data/raw/rcn/locales_{i:06d}.gml"
-
-                with open(file_path, "wb") as file:
-                    file.write(response.content)
-
-                print(f"Downloaded batch starting at {i}")
                 break
 
             except requests.RequestException as error:
                 print(
-                    f"Attempt {attempt}/{max_retries} failed "
-                    f"for batch {i}: {error}"
+                    f"[{county_code}] "
+                    f"Attempt {attempt}/{MAX_RETRIES} failed "
+                    f"for batch starting at {start_index}: {error}"
                 )
 
-                if attempt == max_retries:
-                    failed_batches.append(i)
-                else:
+                if attempt < MAX_RETRIES:
                     time.sleep(5)
 
+        if response is None:
+            print(
+                f"[{county_code}] Download stopped. "
+                f"Could not retrieve batch starting at {start_index}."
+            )
+            return False
+
+        number_returned = get_number_returned(response)
+
+        if number_returned == 0:
+            break
+
+        file_path = county_dir / f"locales_{start_index:06d}.gml"
+
+        with open(file_path, "wb") as file:
+            file.write(response.content)
+
+        downloaded_records += number_returned
+
+        print(
+            f"[{county_code}] Downloaded batch "
+            f"{start_index}: {number_returned} records"
+        )
+
+        if number_returned < batch_size:
+            break
+
+        start_index += batch_size
         time.sleep(REQUEST_DELAY)
 
-    print("Failed batches:", failed_batches)
+    print(
+        f"[{county_code}] Finished. "
+        f"Downloaded {downloaded_records} records."
+    )
+
+    return True
 
 
 def main():
-    # 6855 matching elements in ms:lokale
-    download(
-        filter_xml=FILTER_XML,
-        batch_size=500,
-        n=6855
-    )
+    failed_counties = []
+
+    for county_code in COUNTY_CODES:
+        print(f"\nStarting county {county_code}...")
+
+        success = download_county(county_code)
+
+        if not success:
+            failed_counties.append(county_code)
+
+    print("\nDownload completed.")
+
+    if failed_counties:
+        print(f"Failed counties: {failed_counties}")
+    else:
+        print("All counties downloaded successfully.")
 
 
 if __name__ == "__main__":

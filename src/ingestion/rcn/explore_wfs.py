@@ -130,7 +130,7 @@ def get_output_formats(root):
     return formats
 
 def main():
-    root = ET.parse("data/raw/rcn/locales_000000.gml").getroot()
+    root = ET.parse("data/raw/rcn/1263/locales_000000.gml")
     records = to_dict(root)
     print(records[0])
 

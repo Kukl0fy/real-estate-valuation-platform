@@ -35,5 +35,13 @@ CREATE TABLE IF NOT EXISTS raw.locales (
     lok_pow_przyn TEXT,
     lok_cena_brutto TEXT,
     lok_vat TEXT,
-    lok_adres TEXT
+    lok_adres TEXT,
+
+    UNIQUE (
+        serwis_rcn,
+        tran_lokalny_id_iip,
+        tran_wersja_id,
+        lok_id_lokalu
+    )
 );
+
